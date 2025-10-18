@@ -1,0 +1,221 @@
+# docker-compose.yaml
+# Запуск:
+#   docker compose --env-file .env up airflow-init
+#   docker compose --env-file .env up -d
+
+services:
+  # -------- Airflow metadata Postgres --------
+  pg-airflow:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_PG_PASS}
+      POSTGRES_DB: airflow
+    volumes:
+      - pg_airflow_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  # -------- ODS Postgres (целевое хранилище) --------
+  pg-ods:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${ODS_PG_USER}
+      POSTGRES_PASSWORD: ${ODS_PG_PASS}
+      POSTGRES_DB: ${ODS_PG_DB}
+    ports:
+      - "5433:5432" # снаружи 5433, чтобы не конфликтовать
+    volumes:
+      - pg_ods_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${ODS_PG_USER}"]
+      interval: 5s
+      retries: 10
+
+  # -------- MongoDB (третье хранилище) --------
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      retries: 10
+
+  # -------- MinIO (S3) --------
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Web-консоль
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/live"]
+      interval: 10s
+      retries: 10
+
+  # Создание бакета при старте
+  minio-mc:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      mc mb -p local/${MINIO_BUCKET} || true &&
+      mc anonymous set download local/${MINIO_BUCKET} || true &&
+      echo 'MinIO bucket ${MINIO_BUCKET} ready';
+      sleep 2;
+      "
+    restart: "no"
+
+  # -------- Airflow Webserver --------
+  airflow-webserver:
+    image: apache/airflow:2.9.3-python3.11
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY}"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: "Europe/Helsinki"
+      # ставим провайдеры/библиотеки без Dockerfile
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt
+        apache-airflow-providers-amazon
+        apache-airflow-providers-postgres
+        apache-airflow-providers-mongo
+        apache-airflow-providers-http
+        boto3 minio pandas pyarrow requests
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      retries: 10
+
+  # -------- Airflow Scheduler --------
+  airflow-scheduler:
+    image: apache/airflow:2.9.3-python3.11
+    depends_on:
+      airflow-webserver:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY}"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: "Europe/Helsinki"
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt
+        apache-airflow-providers-amazon
+        apache-airflow-providers-postgres
+        apache-airflow-providers-mongo
+        apache-airflow-providers-http
+        boto3 minio pandas pyarrow requests
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    command: scheduler
+
+  # -------- Airflow Triggerer (для deferrable operators) --------
+  airflow-triggerer:
+    image: apache/airflow:2.9.3-python3.11
+    depends_on:
+      airflow-webserver:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY}"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: "Europe/Helsinki"
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt
+        apache-airflow-providers-amazon
+        apache-airflow-providers-postgres
+        apache-airflow-providers-mongo
+        apache-airflow-providers-http
+        boto3 minio pandas pyarrow requests
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+    command: triggerer
+
+  # -------- Одноразовый init-контейнер (инициализация Airflow) --------
+  airflow-init:
+    image: apache/airflow:2.9.3-python3.11
+    depends_on:
+      pg-airflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY}"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_PG_PASS}@pg-airflow:5432/airflow
+      AIRFLOW_SUPERUSER_USERNAME: ${AIRFLOW_SUPERUSER_USERNAME}
+      AIRFLOW_SUPERUSER_PASSWORD: ${AIRFLOW_SUPERUSER_PASSWORD}
+      AIRFLOW_SUPERUSER_FIRSTNAME: ${AIRFLOW_SUPERUSER_FIRSTNAME}
+      AIRFLOW_SUPERUSER_LASTNAME: ${AIRFLOW_SUPERUSER_LASTNAME}
+      AIRFLOW_SUPERUSER_EMAIL: ${AIRFLOW_SUPERUSER_EMAIL}
+      # Connections (URI) из .env
+      CONN_MINIO: ${CONN_MINIO}
+      CONN_PG_ODS: ${CONN_PG_ODS}
+      CONN_MONGO: ${CONN_MONGO}
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt
+        apache-airflow-providers-amazon
+        apache-airflow-providers-postgres
+        apache-airflow-providers-mongo
+        apache-airflow-providers-http
+        boto3 minio pandas pyarrow requests
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./init:/opt/airflow/init
+      - airflow_logs:/opt/airflow/logs
+    entrypoint: ["/bin/bash", "/opt/airflow/init/airflow_init.sh"]
+    restart: "no"
+
+  # -------- pgAdmin (удобно для демонстрации) --------
+  pgadmin:
+    image: dpage/pgadmin4:8.12
+    depends_on:
+      pg-ods:
+        condition: service_started
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5050:80"
+
+volumes:
+  airflow_logs:
+  pg_airflow_data:
+  pg_ods_data:
+  mongo_data:
+  minio_data:
