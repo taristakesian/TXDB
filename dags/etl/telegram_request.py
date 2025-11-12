@@ -21,16 +21,17 @@ except ModuleNotFoundError:  # airflow-init, где telethon ещё не уст�
         """Fallback, если telethon не установлен."""
         pass
 
+from dotenv import load_dotenv
 
-
+load_dotenv()
 # -----------------------------------------------------------
 # НАСТРОЙКИ – заполни под себя
 # -----------------------------------------------------------
 
 # твой api_id / api_hash / phone
-API_ID = 22716114          # TODO: при необходимости поменяй
-API_HASH = "7769cf3d5099139b4a448f3d8d3ebf6a"
-PHONE = "+79932211853"
+API_ID: Optional[int] = os.getenv("API_ID")
+API_HASH: Optional[str] = os.getenv("API_HASH")
+PHONE: Optional[str] = os.getenv("PHONE")
 BASE_DIR = os.path.dirname(__file__)
 SESSION_PATH = os.path.join(BASE_DIR, "skinport_session")
 
@@ -248,3 +249,12 @@ def upload_to_minio(file_path: str, object_name: Optional[str] = None) -> None:
         file_path=file_path,
     )
     print(f"Файл {file_path} загружен в MinIO как {MINIO_BUCKET}/{object_name}")
+
+
+if __name__ == "__main__":
+    # для отладки вне Airflow
+    downloaded_file = send_request_and_download_sync()
+    print("Downloaded file:", downloaded_file)
+
+    # upload_to_postgres(downloaded_file)
+    # upload_to_minio(downloaded_file)

@@ -98,7 +98,7 @@ with DAG(
     description="Выгрузка BitSkins → ODS Postgres",
     start_date=start_date,
     schedule="@daily",
-    catchup=True,
+    catchup=False,
 ) as dag:
 
     extract_bitskins = PythonOperator(
