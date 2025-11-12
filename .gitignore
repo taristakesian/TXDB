@@ -1,1 +1,9 @@
 .env
+data/
+skinport_session.session
+dags/skinport_session.session
+dags/__pycache__
+dags/etl/__pycache__
+.gitignore
+cs2_market.db
+bitskins_unload.parquet
