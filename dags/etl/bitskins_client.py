@@ -1,7 +1,7 @@
 import requests
 import time
 import os
-import json
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,12 +14,14 @@ class BitSkinsClient:
         self.api_key = api_key
         self.amount_skins_unload = amount_skins_unload
         self.fields_to_unload = ['id', 'price', 'sticker_counter', 'created_at', 'name', 'skin_id']
+        self.rename_fields = {'name': 'market_hash_name'}
         self.url_api = "https://api.bitskins.com"
+        self.id_unload = yaml.safe_load(open("config/id_unload.yaml"))['id']
 
     def get_items(self):
         bd = []
         time_for_req = 1
-        for i in range(1, self.amount_skins_unload):
+        for i in self.id_unload:
             data = {
                 "limit": 100,
                 "offset": 0,
@@ -40,6 +42,9 @@ class BitSkinsClient:
                 {key: item[key] for key in self.fields_to_unload}
                 for item in response['list']
             ]
+            for key in self.rename_fields:
+                bd[-1][self.rename_fields[key]] = bd[-1][key]
+                del bd[-1][key]
             realised_time = time.time() - t
             time.sleep(max(time_for_req - realised_time, 0))
 
