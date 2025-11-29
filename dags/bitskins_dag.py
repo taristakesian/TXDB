@@ -87,7 +87,7 @@ def _load_bitskins_to_postgres(**context) -> None:
 default_args = {
     "owner": "tigran",
     "retries": 1,
-    "retry_delay": datetime.timedelta(minutes=10),
+    "retry_delay": datetime.timedelta(minutes=2),
 }
 
 start_date = datetime.datetime(2025, 11, 6)
