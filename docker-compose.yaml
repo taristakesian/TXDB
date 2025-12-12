@@ -221,9 +221,49 @@ services:
     ports:
       - "5050:80"
 
+  # -------- Superset Metadata DB --------
+  pg-superset:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+      POSTGRES_DB: superset
+    volumes:
+      - pg_superset_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "superset"]
+      interval: 5s
+      retries: 10
+
+  # -------- Superset App --------
+  superset:
+    build: ./superset_build
+    depends_on:
+      pg-superset:
+        condition: service_healthy
+    environment:
+      SUPERSET_SECRET_KEY: "THIS_IS_A_TEMPORARY_SECRET_KEY_REPLACE_IN_PROD"
+      SQLALCHEMY_DATABASE_URI: "postgresql://superset:superset@pg-superset:5432/superset"
+      # Отключаем загрузку примеров для ускорения
+      SUPERSET_LOAD_EXAMPLES: "no"
+      CYPRESS_CONFIG: "false"
+    ports:
+      - "8088:8088"
+    volumes:
+      - superset_home:/app/superset_home
+    command: >
+       sh -c "
+       superset fab create-admin --username admin --firstname Superset --lastname Admin --email admin@superset.com --password admin &&
+       superset db upgrade &&
+       superset init &&
+       /usr/bin/run-server.sh
+       "
+
 volumes:
   airflow_logs:
   pg_airflow_data:
   pg_ods_data:
   mongo_data:
   minio_data:
+  pg_superset_data:
+  superset_home:

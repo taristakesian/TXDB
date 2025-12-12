@@ -4,7 +4,7 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 import datetime
 
-POSTGRES_CONN_ID = "ods_postgres"  # твой conn_id
+POSTGRES_CONN_ID = "ods_postgres"
 
 DDL_SQL = r"""
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

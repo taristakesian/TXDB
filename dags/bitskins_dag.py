@@ -22,7 +22,7 @@ def _extract_bitskins(**context) -> str:
     Тянем данные с BitSkins и сохраняем в JSON-файл.
     Возвращаем путь к файлу через XCom.
     """
-    client = BitSkinsClient(amount_skins_unload=100, api_key=BITSKINS_API_KEY)
+    client = BitSkinsClient(amount_skins_unload=10, api_key=BITSKINS_API_KEY)
     items = client.get_items()
 
     out_dir = "/opt/airflow/data/bitskins"
